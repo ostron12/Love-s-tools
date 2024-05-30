@@ -2,7 +2,7 @@ bl_info = {
     "name": "Love's Tools",
     "blender": (2, 80, 0),
     "category": "Object",
-    "version": (1, 0, 0),
+    "version": (1, 0, 2),
     "author": "LoveD",
     "description": "A collection of custom tools for various operations including origin transforms, material management, backdrops, lighting, face orientation toggle, scale checker, and UV checker.",
 }
@@ -12,6 +12,44 @@ import bmesh
 import math
 import random
 from mathutils import Vector
+import urllib.request
+import os
+
+def download_latest_version(url, file_path):
+    try:
+        response = urllib.request.urlopen(url)
+        data = response.read()
+        with open(file_path, 'wb') as file:
+            file.write(data)
+        return True
+    except Exception as e:
+        print(f"Failed to download the latest version: {e}")
+        return False
+
+def replace_addon_script():
+    script_path = os.path.realpath(__file__)
+    
+    # Define the URL of the latest version of your add-on script
+    latest_version_url = "https://raw.githubusercontent.com/ostron12/Love-s-tools/main/Love's%20tools.py"
+    
+    # Download the latest version
+    if download_latest_version(latest_version_url, script_path):
+        # Reload the add-on
+        bpy.ops.script.reload()
+        print("Add-on updated and reloaded successfully.")
+    else:
+        print("Failed to update the add-on.")
+
+# Update Operator
+class OBJECT_OT_UpdateAddon(bpy.types.Operator):
+    bl_idname = "object.update_addon"
+    bl_label = "Update Add-on"
+    bl_description = "Download and update to the latest version of the add-on"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        replace_addon_script()
+        return {'FINISHED'}
 
 # Origin and Transform Tool Operators
 class OBJECT_OT_SetOriginTopZeroTransforms(bpy.types.Operator):
@@ -186,7 +224,9 @@ def create_open_box(width, depth, height, angle, subsurf_level):
 
     obj.location.z = 0
 
-    mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
+    # Enable smooth shading
+    for poly in mesh.polygons:
+        poly.use_smooth = True
 
     material = bpy.data.materials.new(name="GreyMaterial")
     material.diffuse_color = (0.6549, 0.6549, 0.6549, 1)  # A7A7A7 in RGB
@@ -199,13 +239,13 @@ def point_light_at_object(light, target_location):
     direction = target_location - light.location
     rot_quat = direction.to_track_quat('Z', 'Y')
     light.rotation_euler = rot_quat.to_euler()
-    light.rotation_euler.rotate_axis('X', math.radians(180))
+    light.rotation_euler.rotate_axis('X', math.radians(180))  # Flip 180 degrees along X-axis
 
 def create_three_point_lighting_around_object(obj, key_light_strength=1000, fill_light_strength=500, back_light_strength=800):
     bpy.ops.object.select_all(action='DESELECT')
-    for obj in bpy.context.scene.objects:
-        if obj.type == 'LIGHT':
-            obj.select_set(True)
+    for light in bpy.context.scene.objects:
+        if light.type == 'LIGHT':
+            light.select_set(True)
     bpy.ops.object.delete()
 
     location = obj.location
@@ -269,72 +309,40 @@ class OBJECT_OT_CreateThreePointLighting(bpy.types.Operator):
             self.report({'WARNING'}, "No active object selected")
             return {'CANCELLED'}
 
-# Function to create materials based on object names for selected objects
-def create_materials_for_selected_objects(prefix="", ignore_prefix="", add_suffix=True):
-    selected_objects = bpy.context.selected_objects
-    for obj in selected_objects:
-        if obj.type == 'MESH':
-            obj_name = obj.name
-            if ignore_prefix and obj_name.startswith(ignore_prefix):
-                obj_name = obj_name[len(ignore_prefix):]
-
-            material_name = f"{prefix}{obj_name}"
-            if add_suffix:
-                material_name += "_Material"
-
-            mat = bpy.data.materials.new(name=material_name)
-            mat.use_nodes = True
-            nodes = mat.node_tree.nodes
-
-            for node in nodes:
-                nodes.remove(node)
-
-            bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
-            bsdf.location = 0, 0
-
-            material_output = nodes.new(type='ShaderNodeOutputMaterial')
-            material_output.location = 200, 0
-
-            links = mat.node_tree.links
-            links.new(bsdf.outputs['BSDF'], material_output.inputs['Surface'])
-
-            if obj.data.materials:
-                obj.data.materials[0] = mat
-            else:
-                obj.data.materials.append(mat)
-
-            random_color = (random.random(), random.random(), random.random(), 1)
-            bsdf.inputs['Base Color'].default_value = random_color
-
-            print(f"Created material '{material_name}' and assigned to '{obj.name}'")
-
+# Material Creator Operators
 class OBJECT_OT_CreateMaterials(bpy.types.Operator):
-    bl_label = "Create Materials for Selected"
     bl_idname = "object.create_materials"
-    bl_description = "Create materials for selected objects based on their names"
+    bl_label = "Create Materials for Selected"
     bl_options = {'REGISTER', 'UNDO'}
-
+    
     def execute(self, context):
-        create_materials_for_selected_objects(add_suffix=False)
+        selected_objects = context.selected_objects
+        for obj in selected_objects:
+            if obj.type == 'MESH':
+                mat = bpy.data.materials.new(name=f"Material_{obj.name}")
+                mat.use_nodes = True
+                obj.data.materials.append(mat)
+        self.report({'INFO'}, "Materials created for selected objects")
         return {'FINISHED'}
 
 class OBJECT_OT_CreateMaterialsPrefixed(bpy.types.Operator):
-    bl_label = "Create Materials with Prefix"
     bl_idname = "object.create_materials_prefixed"
-    bl_description = "Create materials for selected objects with a custom prefix, ignoring 'SM_' prefix in object names"
+    bl_label = "Create Materials with Prefix"
     bl_options = {'REGISTER', 'UNDO'}
-
+    
     def execute(self, context):
-        custom_prefix = context.scene.custom_material_prefix or "M_"
-        create_materials_for_selected_objects(prefix=custom_prefix, ignore_prefix="SM_", add_suffix=False)
+        selected_objects = context.selected_objects
+        prefix = context.scene.custom_material_prefix
+        for obj in selected_objects:
+            if obj.type == 'MESH':
+                material_name = f"{prefix}{obj.name}".replace("__", "_")
+                mat = bpy.data.materials.new(name=material_name)
+                mat.use_nodes = True
+                obj.data.materials.append(mat)
+        self.report({'INFO'}, f"Materials with prefix '{prefix}' created for selected objects")
         return {'FINISHED'}
 
-# Toggle Face Orientation Operator
-def turn_off_face_orientation():
-    bpy.context.space_data.overlay.show_face_orientation = False
-    bpy.ops.object.report_message('INVOKE_DEFAULT', message="Face Orientation turned off.")
-    return None  # Stops the timer
-
+# Face Orientation Toggle Operator
 class OBJECT_OT_ToggleFaceOrientation(bpy.types.Operator):
     bl_idname = "object.toggle_face_orientation"
     bl_label = "Toggle Face Orientation"
@@ -344,12 +352,9 @@ class OBJECT_OT_ToggleFaceOrientation(bpy.types.Operator):
         current_state = bpy.context.space_data.overlay.show_face_orientation
         bpy.context.space_data.overlay.show_face_orientation = not current_state
         
-        if not current_state:
-            bpy.app.timers.register(turn_off_face_orientation, first_interval=10.0)
-        
         return {'FINISHED'}
 
-# Check Scale Operator
+# Scale Checker Operator
 class OBJECT_OT_CheckScale(bpy.types.Operator):
     bl_idname = "object.check_scale"
     bl_label = "Check Scale"
@@ -383,7 +388,7 @@ class OBJECT_OT_CheckScale(bpy.types.Operator):
         else:
             layout.label(text="Scale Status: Correct")
 
-# Toggle UV Checker Operator
+# UV Checker Operator
 class OBJECT_OT_ToggleUVChecker(bpy.types.Operator):
     bl_idname = "object.toggle_uv_checker"
     bl_label = "Toggle UV Checker"
@@ -420,23 +425,10 @@ class OBJECT_OT_ToggleUVChecker(bpy.types.Operator):
 
         return {'FINISHED'}
 
-# Report Message Operator
-class OBJECT_OT_ReportMessage(bpy.types.Operator):
-    bl_idname = "object.report_message"
-    bl_label = "Report Message"
-    bl_options = {'INTERNAL'}
-    
-    message: bpy.props.StringProperty()
-    
-    def execute(self, context):
-        self.report({'INFO'}, self.message)
-        return {'FINISHED'}
-
 # Check Unassigned Polygons Operator
 class MESH_OT_CheckUnassigned(bpy.types.Operator):
-    """Check mesh for unassigned polygons"""
     bl_idname = "mesh.check_unassigned"
-    bl_label = "Check Unassigned"
+    bl_label = "Check Unassigned Polygons"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
@@ -476,7 +468,7 @@ class MESH_OT_CheckUnassigned(bpy.types.Operator):
 
         return {'FINISHED'}
 
-# Unified Panel
+# Add the button in the panel
 class OBJECT_PT_LovesTools(bpy.types.Panel):
     bl_label = "Love's Tools"
     bl_idname = "OBJECT_PT_loves_tools"
@@ -486,6 +478,10 @@ class OBJECT_PT_LovesTools(bpy.types.Panel):
     
     def draw(self, context):
         layout = self.layout
+
+        # Add-on Version
+        version_str = ".".join(map(str, bl_info['version']))
+        layout.label(text=f"Version: {version_str}")
         
         # Origin and Transform Tools
         layout.label(text="Origin and Transform Tools")
@@ -569,6 +565,11 @@ class OBJECT_PT_LovesTools(bpy.types.Panel):
         row = layout.row()
         row.operator("mesh.check_unassigned", text="Check Unassigned Polygons")
 
+        # Update Add-on
+        layout.separator()
+        row = layout.row()
+        row.operator("object.update_addon", text="Update Add-on")
+
 # Register and Unregister Classes
 def register():
     bpy.utils.register_class(OBJECT_OT_SetOriginTopZeroTransforms)
@@ -583,8 +584,8 @@ def register():
     bpy.utils.register_class(OBJECT_OT_ToggleFaceOrientation)
     bpy.utils.register_class(OBJECT_OT_CheckScale)
     bpy.utils.register_class(OBJECT_OT_ToggleUVChecker)
-    bpy.utils.register_class(OBJECT_OT_ReportMessage)
     bpy.utils.register_class(MESH_OT_CheckUnassigned)
+    bpy.utils.register_class(OBJECT_OT_UpdateAddon)
     bpy.utils.register_class(OBJECT_PT_LovesTools)
     bpy.types.Scene.custom_material_prefix = bpy.props.StringProperty(
         name="Custom Material Prefix",
@@ -605,8 +606,8 @@ def unregister():
     bpy.utils.unregister_class(OBJECT_OT_ToggleFaceOrientation)
     bpy.utils.unregister_class(OBJECT_OT_CheckScale)
     bpy.utils.unregister_class(OBJECT_OT_ToggleUVChecker)
-    bpy.utils.unregister_class(OBJECT_OT_ReportMessage)
     bpy.utils.unregister_class(MESH_OT_CheckUnassigned)
+    bpy.utils.unregister_class(OBJECT_OT_UpdateAddon)
     bpy.utils.unregister_class(OBJECT_PT_LovesTools)
     del bpy.types.Scene.custom_material_prefix
 
