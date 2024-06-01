@@ -2,9 +2,9 @@ bl_info = {
     "name": "Love's Tools",
     "blender": (2, 80, 0),
     "category": "Object",
-    "version": (1, 0, 2),
+    "version": (1, 0, 3),
     "author": "LoveD",
-    "description": "A collection of custom tools for various operations including origin transforms, material management, backdrops, lighting, face orientation toggle, scale checker, and UV checker.",
+    "description": "A collection of custom tools for various operations including origin transforms, material management, backdrops, lighting, face orientation toggle, scale checker, UV checker, and HDRI management.",
 }
 
 import bpy
@@ -14,6 +14,9 @@ import random
 from mathutils import Vector
 import urllib.request
 import os
+from bpy.props import StringProperty
+from bpy.types import Operator, Panel
+from bpy_extras.io_utils import ImportHelper
 
 def download_latest_version(url, file_path):
     try:
@@ -50,6 +53,102 @@ class OBJECT_OT_UpdateAddon(bpy.types.Operator):
     def execute(self, context):
         replace_addon_script()
         return {'FINISHED'}
+
+# HDRI and Transparency Operators
+class OT_LoadHDRI(Operator, ImportHelper):
+    bl_idname = "wm.load_hdri"
+    bl_label = "Load HDRI"
+    bl_description = "Load an HDRI file to use as the environment"
+
+    filename_ext = ".hdr"
+    filter_glob: StringProperty(default="*.hdr;*.exr", options={'HIDDEN'})
+
+    def execute(self, context):
+        file_path = self.filepath
+        bpy.context.scene.world.use_nodes = True
+
+        # Clear existing nodes
+        world = bpy.context.scene.world
+        nodes = world.node_tree.nodes
+        links = world.node_tree.links
+        nodes.clear()
+
+        # Add Environment Texture node
+        node_environment = nodes.new(type='ShaderNodeTexEnvironment')
+        node_environment.image = bpy.data.images.load(file_path)
+        node_environment.location = (-300, 0)
+
+        # Add Background node
+        node_background = nodes.new(type='ShaderNodeBackground')
+        node_background.location = (0, 0)
+
+        # Add World Output node
+        node_output = nodes.new(type='ShaderNodeOutputWorld')
+        node_output.location = (300, 0)
+
+        # Link nodes
+        links.new(node_environment.outputs["Color"], node_background.inputs["Color"])
+        links.new(node_background.outputs["Background"], node_output.inputs["Surface"])
+
+        context.scene.hdri_filepath = file_path
+        return {'FINISHED'}
+
+class OT_RemoveHDRI(Operator):
+    bl_idname = "wm.remove_hdri"
+    bl_label = "Remove HDRI"
+    bl_description = "Remove the current HDRI environment"
+
+    def execute(self, context):
+        world = bpy.context.scene.world
+        world.use_nodes = True
+        nodes = world.node_tree.nodes
+        nodes.clear()
+
+        # Remove the HDRI image from Blender data
+        file_path = context.scene.hdri_filepath
+        if file_path:
+            hdri_image = bpy.data.images.get(bpy.path.basename(file_path))
+            if hdri_image:
+                bpy.data.images.remove(hdri_image, do_unlink=True)
+
+        context.scene.hdri_filepath = ""
+        return {'FINISHED'}
+
+class OT_ToggleTransparentBackground(Operator):
+    bl_idname = "wm.toggle_transparent_background"
+    bl_label = "Toggle Transparent Background"
+    bl_description = "Toggle the background transparency for rendering"
+
+    def execute(self, context):
+        context.scene.render.film_transparent = not context.scene.render.film_transparent
+        return {'FINISHED'}
+
+class VIEW3D_PT_CustomPanel(Panel):
+    bl_label = "HDRI and Transparency"
+    bl_idname = "VIEW3D_PT_custom_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'Custom'
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+
+        row = layout.row()
+        row.operator("wm.load_hdri", text="Load HDRI")
+
+        if scene.hdri_filepath:
+            row = layout.row()
+            row.label(text=f"Loaded HDRI: {scene.hdri_filepath}")
+
+        row = layout.row()
+        row.operator("wm.remove_hdri", text="Remove HDRI")
+
+        row = layout.row()
+        row.operator("wm.toggle_transparent_background", text="Toggle Transparent Background")
+        
+        row = layout.row()
+        row.label(text="Transparent Background: {}".format("On" if context.scene.render.film_transparent else "Off"))
 
 # Origin and Transform Tool Operators
 class OBJECT_OT_SetOriginTopZeroTransforms(bpy.types.Operator):
@@ -565,6 +664,26 @@ class OBJECT_PT_LovesTools(bpy.types.Panel):
         row = layout.row()
         row.operator("mesh.check_unassigned", text="Check Unassigned Polygons")
 
+        layout.separator()
+        
+        # HDRI and Transparency
+        layout.label(text="HDRI and Transparency")
+        row = layout.row()
+        row.operator("wm.load_hdri", text="Load HDRI")
+
+        if context.scene.hdri_filepath:
+            row = layout.row()
+            row.label(text=f"Loaded HDRI: {context.scene.hdri_filepath}")
+
+        row = layout.row()
+        row.operator("wm.remove_hdri", text="Remove HDRI")
+
+        row = layout.row()
+        row.operator("wm.toggle_transparent_background", text="Toggle Transparent Background")
+
+        row = layout.row()
+        row.label(text="Transparent Background: {}".format("On" if context.scene.render.film_transparent else "Off"))
+
         # Update Add-on
         layout.separator()
         row = layout.row()
@@ -572,6 +691,10 @@ class OBJECT_PT_LovesTools(bpy.types.Panel):
 
 # Register and Unregister Classes
 def register():
+    bpy.utils.register_class(OT_LoadHDRI)
+    bpy.utils.register_class(OT_RemoveHDRI)
+    bpy.utils.register_class(OT_ToggleTransparentBackground)
+    bpy.utils.register_class(VIEW3D_PT_CustomPanel)
     bpy.utils.register_class(OBJECT_OT_SetOriginTopZeroTransforms)
     bpy.utils.register_class(OBJECT_OT_SetOriginMiddleZeroTransforms)
     bpy.utils.register_class(OBJECT_OT_SetOriginBottomZeroTransforms)
@@ -592,8 +715,13 @@ def register():
         description="Prefix to add to material names",
         default="M_"
     )
+    bpy.types.Scene.hdri_filepath = StringProperty(name="HDRI Filepath", default="")
 
 def unregister():
+    bpy.utils.unregister_class(OT_LoadHDRI)
+    bpy.utils.unregister_class(OT_RemoveHDRI)
+    bpy.utils.unregister_class(OT_ToggleTransparentBackground)
+    bpy.utils.unregister_class(VIEW3D_PT_CustomPanel)
     bpy.utils.unregister_class(OBJECT_OT_SetOriginTopZeroTransforms)
     bpy.utils.unregister_class(OBJECT_OT_SetOriginMiddleZeroTransforms)
     bpy.utils.unregister_class(OBJECT_OT_SetOriginBottomZeroTransforms)
@@ -610,6 +738,7 @@ def unregister():
     bpy.utils.unregister_class(OBJECT_OT_UpdateAddon)
     bpy.utils.unregister_class(OBJECT_PT_LovesTools)
     del bpy.types.Scene.custom_material_prefix
+    del bpy.types.Scene.hdri_filepath
 
 if __name__ == "__main__":
     register()
