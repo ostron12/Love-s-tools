@@ -2,7 +2,7 @@ bl_info = {
     "name": "Love's Tools",
     "blender": (2, 80, 0),
     "category": "Object",
-    "version": (1, 0, 3),
+    "version": (1, 0, 4),
     "author": "LoveD",
     "description": "A collection of custom tools for various operations including origin transforms, material management, backdrops, lighting, face orientation toggle, scale checker, UV checker, and HDRI management.",
 }
@@ -260,7 +260,10 @@ class OBJECT_OT_DeleteAllMaterials(bpy.types.Operator):
             if obj.type == 'MESH':
                 obj.data.materials.clear()
                 self.report({'INFO'}, f"Deleted all materials from {obj.name}")
-        
+        # Delete materials from Blender data
+        for mat in bpy.data.materials:
+            if mat.users == 0:
+                bpy.data.materials.remove(mat)
         return {'FINISHED'}
 
 class OBJECT_OT_DeleteAllMaterialsScene(bpy.types.Operator):
@@ -272,8 +275,11 @@ class OBJECT_OT_DeleteAllMaterialsScene(bpy.types.Operator):
         for obj in bpy.data.objects:
             if obj.type == 'MESH':
                 obj.data.materials.clear()
+        # Delete materials from Blender data
+        for mat in bpy.data.materials:
+            if mat.users == 0:
+                bpy.data.materials.remove(mat)
         self.report({'INFO'}, "Deleted all materials from the entire scene")
-        
         return {'FINISHED'}
 
 # Backdrop and Lighting Operators
@@ -418,7 +424,7 @@ class OBJECT_OT_CreateMaterials(bpy.types.Operator):
         selected_objects = context.selected_objects
         for obj in selected_objects:
             if obj.type == 'MESH':
-                mat = bpy.data.materials.new(name=f"Material_{obj.name}")
+                mat = bpy.data.materials.new(name=obj.name)
                 mat.use_nodes = True
                 obj.data.materials.append(mat)
         self.report({'INFO'}, "Materials created for selected objects")
@@ -434,7 +440,15 @@ class OBJECT_OT_CreateMaterialsPrefixed(bpy.types.Operator):
         prefix = context.scene.custom_material_prefix
         for obj in selected_objects:
             if obj.type == 'MESH':
-                material_name = f"{prefix}{obj.name}".replace("__", "_")
+                # Check if the object name starts with 'SM_'
+                if obj.name.upper().startswith("SM_"):
+                    # Remove 'SM_' prefix
+                    new_name = obj.name[3:]
+                else:
+                    new_name = obj.name
+
+                # Create new material name with the custom prefix
+                material_name = f"{prefix}{new_name}".replace("__", "_")
                 mat = bpy.data.materials.new(name=material_name)
                 mat.use_nodes = True
                 obj.data.materials.append(mat)
@@ -513,13 +527,13 @@ class OBJECT_OT_ToggleUVChecker(bpy.types.Operator):
             links.new(checker_texture.outputs['Color'], bsdf.inputs['Base Color'])
             links.new(bsdf.outputs['BSDF'], material_output.inputs['Surface'])
 
-        toggle_off = all("UVChecker" in [mat.name for mat in obj.data.materials] for obj in bpy.data.objects if obj.type == 'MESH')
+        toggle_off = all("UVChecker" in [mat.name for mat in obj.data.materials if mat is not None] for obj in bpy.data.objects if obj.type == 'MESH')
         for obj in bpy.data.objects:
             if obj.type == 'MESH':
                 if toggle_off:
                     obj.data.materials.clear()
                 else:
-                    if "UVChecker" not in [mat.name for mat in obj.data.materials]:
+                    if "UVChecker" not in [mat.name for mat in obj.data.materials if mat is not None]:
                         obj.data.materials.append(checker_material)
 
         return {'FINISHED'}
